@@ -1,0 +1,48 @@
+
+if {[lsearch [namespace children] ::tcltest] == -1} {
+  package require tcltest
+  namespace import ::tcltest::*
+}
+
+package require shp
+
+test shp-1.1 {Use of shp handle} {
+  set s [shp open "tests/Common Interest/BASINS0811.shp"]
+  shp close $s
+} {}
+
+test shp-1.2 {Use of shp object} {
+  set s [shp open "tests/Common Interest/BASINS0811.shp"]
+  set o [shp index $s 1]
+  set xlen [llength [shp get $o x]]
+  set ylen [llength [shp get $o y]]
+  shp close $s
+  expr {$xlen == $ylen}
+} {1}
+
+test shp-1.3 {Use of shp close} {
+  catch {shp close doesnotexist} result
+  return $result
+} {can not find handle named "doesnotexist"}
+
+test shp-1.4 {Test for Segmentation fault} {
+  interp create a
+  a eval {package require shp}
+  a eval {set f [shp open "tests/Common Interest/BASINS0811.shp"]}
+  a eval {shp close $f}
+  interp delete a
+} {}
+
+test shp-1.5 {Test cleanup mechanisms} {
+  interp create a
+  a eval {package require shp}
+  a eval {set f [shp open {tests/Common Interest/BASINS0811.shp}]}
+  interp delete a
+} {}
+
+proc exit args {}
+# cleanup
+::tcltest::cleanupTests
+return
+
+# vim:syntax=tcl:
