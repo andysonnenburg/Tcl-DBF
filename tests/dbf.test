@@ -4,41 +4,33 @@ if {[lsearch [namespace children] ::tcltest] == -1} {
   namespace import ::tcltest::*
 }
 
-package require shp
+package require dbf
 
-test shp-1.1 {Use of shp handle} {
-  set s [shp open "tests/Common Interest/BASINS0811.shp"]
-  shp close $s
-} {}
+set f "tests/Common Interest/BASINS0811.dbf"
 
-test shp-1.2 {Use of shp object} {
-  set s [shp open "tests/Common Interest/BASINS0811.shp"]
-  set o [shp index $s 1]
-  set xlen [llength [shp get $o x]]
-  set ylen [llength [shp get $o y]]
-  shp close $s
-  expr {$xlen == $ylen}
-} {1}
+test dbf-1.1 {Use of dbf length} {
+  dbf length $f
+} {73}
 
-test shp-1.3 {Use of shp close} {
-  catch {shp close doesnotexist} result
-  return $result
-} {can not find handle named "doesnotexist"}
+test dbf-1.2 {Use of dbf index} {
+  dbf index $f 71
+} {0 {N. LA Salt}}
 
-test shp-1.4 {Test for Segmentation fault} {
-  interp create a
-  a eval {package require shp}
-  a eval {set f [shp open "tests/Common Interest/BASINS0811.shp"]}
-  a eval {shp close $f}
-  interp delete a
-} {}
+test dbf-1.3 {Use of dbf size} {
+  dbf size $f
+} {2}
 
-test shp-1.5 {Test cleanup mechanisms} {
-  interp create a
-  a eval {package require shp}
-  a eval {set f [shp open {tests/Common Interest/BASINS0811.shp}]}
-  interp delete a
-} {}
+test dbf-1.4 {Use of dbf keys} {
+  dbf keys $f
+} {Id Name}
+
+test dbf-1.5 {Use of dbf foreach} {
+  dbf foreach fields $f {
+  }
+  set fields
+} {0 {Fayetteville Shale}}
+
+unset f
 
 proc exit args {}
 # cleanup

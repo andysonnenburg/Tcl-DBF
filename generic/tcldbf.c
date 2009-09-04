@@ -69,7 +69,7 @@ static void Release (Handle *);
   Tcl_DStringAppend((dsPtr), literal "", sizeof literal - 1)
 static void AppendObj (Tcl_DString * const, Tcl_Obj * const);
 
-Init (Dbf, interp, dbfPtr)
+Init (interp, dbfPtr)
 {
   CreateCommand (interp, dbfPtr, length);
   CreateCommand (interp, dbfPtr, index);

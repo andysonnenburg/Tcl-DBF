@@ -1,0 +1,4 @@
+AC_DEFUN([FUNCTION_PREFIX], [
+  PACKAGE=[`echo -n "${PACKAGE_NAME:0:1}" | tr "[:lower:]" "[:upper:]"`"${PACKAGE_NAME:1}"]
+  AC_DEFINE_UNQUOTED(PACKAGE, $PACKAGE)
+])

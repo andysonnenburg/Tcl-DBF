@@ -22,15 +22,11 @@
 
 #define FLEX_ARRAY_SIZE (FLEX_ARRAY + 0)
 
-#define CommandDecl(NAME) \
-static int NAME (ClientData, Tcl_Interp *, int, Tcl_Obj * const *); \
-static int NR##NAME (ClientData, Tcl_Interp *, int, Tcl_Obj * const *)
-
-#define Init(PACKAGE, INTERP, NS_PTR) \
-extern int PACKAGE##_Init (Tcl_Interp *); \
-static int PACKAGE##_Init_ (Tcl_Interp *, Tcl_Namespace *); \
+#define Init(INTERP, NS_PTR) \
+extern int JOIN (PACKAGE, _Init) (Tcl_Interp *); \
+static int JOIN (PACKAGE, _Init_) (Tcl_Interp *, Tcl_Namespace *); \
 extern int \
-PACKAGE##_Init (Tcl_Interp * INTERP) \
+JOIN (PACKAGE, _Init) (Tcl_Interp * INTERP) \
 { \
   Tcl_Namespace *NS_PTR; \
   if (Tcl_InitStubs ((INTERP), TCL_VERSION, 0) == NULL) \
@@ -38,7 +34,7 @@ PACKAGE##_Init (Tcl_Interp * INTERP) \
       return TCL_ERROR; \
     } \
   NS_PTR = Tcl_CreateNamespace ((INTERP), "::" PACKAGE_NAME, NULL, NULL); \
-  if (PACKAGE##_Init_ (INTERP, NS_PTR) != TCL_OK) \
+  if (JOIN(PACKAGE, _Init_) (INTERP, NS_PTR) != TCL_OK) \
     { \
       return TCL_ERROR; \
     }; \
@@ -50,23 +46,47 @@ PACKAGE##_Init (Tcl_Interp * INTERP) \
   return TCL_OK; \
 } \
 static int \
-PACKAGE##_Init_ (Tcl_Interp *INTERP, Tcl_Namespace *NS_PTR)
+JOIN (PACKAGE, _Init_) (Tcl_Interp *INTERP, Tcl_Namespace *NS_PTR)
 
+#ifdef Tcl_NRCallObjProc
+
+#define CommandDecl(NAME) \
+static int JOIN (PACKAGE, NAME) (ClientData, Tcl_Interp *, int, Tcl_Obj * const *); \
+static int JOIN (PACKAGE, JOIN (NR, NAME)) (ClientData, Tcl_Interp *, int, Tcl_Obj * const *)
 
 #define CommandDef(NAME, CLIENT_DATA, INTERP, OBJC, OBJV) \
 static int \
-NAME (ClientData clientData, Tcl_Interp * interp, int objc, \
+JOIN (PACKAGE, NAME) (ClientData clientData, Tcl_Interp * interp, int objc, \
          Tcl_Obj * const * objv) \
 { \
-  return Tcl_NRCallObjProc (interp, NR##NAME, clientData, objc, objv); \
+  return Tcl_NRCallObjProc (interp, JOIN (PACKAGE, JOIN (NR, NAME)), clientData, objc, objv); \
 } \
 static int \
-NR##NAME (ClientData CLIENT_DATA, Tcl_Interp * INTERP, int OBJC, \
+JOIN (PACKAGE, JOIN (NR, NAME)) (ClientData CLIENT_DATA, Tcl_Interp * INTERP, int OBJC, \
            Tcl_Obj * const OBJV[])
 
 #define CreateCommand(INTERP, nsPtr, NAME) do { \
-  Tcl_NRCreateCommand((INTERP), "::" PACKAGE_NAME "::" #NAME, NAME, NR##NAME, NULL, NULL); \
+  Tcl_NRCreateCommand((INTERP), "::" PACKAGE_NAME "::" #NAME, JOIN (PACKAGE, NAME), JOIN (PACKAGE, JOIN (NR, NAME)), NULL, NULL); \
   if (Tcl_Export (INTERP, nsPtr, #NAME, 0) != TCL_OK) { \
     return TCL_ERROR; \
   } \
 } while (0)
+
+#else
+
+#define CommandDecl(NAME) \
+static int JOIN (PACKAGE, NAME) (ClientData, Tcl_Interp *, int, Tcl_Obj * const *)
+
+#define CommandDef(NAME, CLIENT_DATA, INTERP, OBJC, OBJV) \
+static int \
+JOIN (PACKAGE, NAME) (ClientData clientData, Tcl_Interp * interp, int objc, \
+         Tcl_Obj * const * objv)
+
+#define CreateCommand(INTERP, nsPtr, NAME) do { \
+  Tcl_CreateObjCommand((INTERP), "::" PACKAGE_NAME "::" #NAME, JOIN (PACKAGE, NAME), NULL, NULL); \
+  if (Tcl_Export (INTERP, nsPtr, #NAME, 0) != TCL_OK) { \
+    return TCL_ERROR; \
+  } \
+} while (0)
+
+#endif
