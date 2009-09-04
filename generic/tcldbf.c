@@ -1,94 +1,34 @@
-#include <stdlib.h>
 #include <string.h>
 #include <tcl.h>
 #include <shapefil.h>
+#include "macros.h"
 
-#ifndef FLEX_ARRAY
-/*
- * See if our compiler is known to support flexible array members.
- */
-#if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 199901L) && (!defined(__SUNPRO_C) || (__SUNPRO_C > 0x580))
-# define FLEX_ARRAY             /* empty */
-#elif defined(__GNUC__)
-# if (__GNUC__ >= 3)
-#  define FLEX_ARRAY            /* empty */
-# else
-#  define FLEX_ARRAY 0          /* older GNU extension */
-# endif
-#endif
+CommandDecl (length);
+CommandDecl (index);
+CommandDecl (size);
+CommandDecl (keys);
+CommandDecl (foreach);
 
-/*
- * Otherwise, default to safer but a bit wasteful traditional style
- */
-#ifndef FLEX_ARRAY
-# define FLEX_ARRAY 1
-#endif
-#endif
+typedef struct
+{
+  int i, length, size;
+} ForeachState;
 
-extern int Dbf_Init (Tcl_Interp *);
+static int ForeachAssignments (Tcl_Interp * const, ForeachState * const,
+                               Tcl_Obj * const, DBFHandle const);
+static int ForeachLoopStep (ClientData[], Tcl_Interp *, int);
 
-#define DbfCommandDecl(NAME) \
-static int Dbf##NAME (ClientData, Tcl_Interp *, int, Tcl_Obj * const *); \
-static int DbfNR##NAME (ClientData, Tcl_Interp *, int, Tcl_Obj * const *); \
-\
-static int \
-Dbf##NAME (ClientData clientData, Tcl_Interp * interp, int objc, \
-         Tcl_Obj * const * objv) \
-{ \
-  return Tcl_NRCallObjProc (interp, DbfNR##NAME, clientData, objc, objv); \
-}
-
-#define DbfInit(INTERP, dbfPtr) do { \
-  if (Tcl_InitStubs ((INTERP), TCL_VERSION, 0) == NULL) \
-    { \
-      return TCL_ERROR; \
-    } \
-  dbfPtr = Tcl_CreateNamespace((INTERP), "::dbf", NULL, NULL); \
-} while (0)
-
-#define DbfProvide(INTERP, dbfPtr) \
-  Tcl_CreateEnsemble((INTERP), "::dbf", dbfPtr, TCL_ENSEMBLE_PREFIX); \
-  if (Tcl_PkgProvide (INTERP, "dbf", PACKAGE_VERSION) != TCL_OK) \
-    { \
-      return TCL_ERROR; \
-    };
-
-#define DbfCommandDef(NAME, CLIENT_DATA, INTERP, OBJC, OBJV) \
-static int \
-DbfNR##NAME (ClientData CLIENT_DATA, Tcl_Interp * INTERP, int OBJC, \
-           Tcl_Obj * const OBJV[])
-
-#define DbfCreateCommand(INTERP, dbfPtr, NAME) do { \
-  Tcl_NRCreateCommand((INTERP), "::dbf::" #NAME, Dbf##NAME, DbfNR##NAME, NULL, NULL); \
-  if (Tcl_Export (INTERP, dbfPtr, #NAME, 0) != TCL_OK) { \
-    return TCL_ERROR; \
-  } \
-} while (0)
-
-
-/* *INDENT-OFF* */
-
-DbfCommandDecl (open)
-DbfCommandDecl (length)
-DbfCommandDecl (index)
-DbfCommandDecl (keys)
-DbfCommandDecl (close) 
-DbfCommandDecl (foreach)
-
-/* *INDENT-ON* */
-
-static void FreeDbfInternalRep (Tcl_Obj *);
-static void DupDbfInternalRep (Tcl_Obj *, Tcl_Obj *);
-static void UpdateDbfString (Tcl_Obj *);
-static int SetDbfFromAny (Tcl_Interp *, Tcl_Obj *);
-static int SetDbfFromPath (Tcl_Interp *, Tcl_Obj *, Tcl_Obj *);
+static void FreeHandleInternalRep (Tcl_Obj *);
+static void DupHandleInternalRep (Tcl_Obj *, Tcl_Obj *);
+static void UpdateHandleString (Tcl_Obj *);
+static int SetHandleFromAny (Tcl_Interp *, Tcl_Obj *);
 
 static Tcl_ObjType dbfType = {
   "dbfHandle",
-  FreeDbfInternalRep,
-  DupDbfInternalRep,
-  UpdateDbfString,
-  SetDbfFromAny
+  FreeHandleInternalRep,
+  DupHandleInternalRep,
+  UpdateHandleString,
+  SetHandleFromAny
 };
 
 typedef struct
@@ -100,47 +40,46 @@ typedef struct
 } Handle;
 
 #define GetHandle(objPtr) ((Handle *) (objPtr)->internalRep.otherValuePtr)
-static int GetHandleFromObj (Tcl_Interp *, Tcl_Obj *, Handle **);
-static void SetHandleObj (Tcl_Obj *, Handle *);
+
+#define DbfGetHandleFromObj(interp, objPtr, handlePtr) \
+  (((objPtr)->typePtr == &dbfType) \
+    ? ((*(handlePtr) = GetHandle(objPtr)), TCL_OK) \
+    : Dbf_GetHandleFromObj ((interp), (objPtr), (handlePtr)))
+
+static int Dbf_GetHandleFromObj (Tcl_Interp *, Tcl_Obj *, Handle **);
+
+#define SetHandle(objPtr, handle) do { \
+  (objPtr)->internalRep.otherValuePtr = (handle); \
+} while (0)
+
+static Tcl_Obj *NewAttributeObj (DBFHandle, int, int);
+static DBFHandle DbfOpen (Tcl_Interp *, Tcl_Obj *);
 
 #define Preserve(handle) do { handle->refCount++; } while (0)
 static void Release (Handle *);
 
+#define FreeInternalRep(objPtr) do { \
+  if ((objPtr)->typePtr != NULL && \
+      (objPtr)->typePtr->freeIntRepProc != NULL) { \
+    (objPtr)->typePtr->freeIntRepProc(objPtr); \
+  } \
+} while (0)
+
 #define AppendLiteral(dsPtr, literal) \
   Tcl_DStringAppend((dsPtr), literal "", sizeof literal - 1)
-static void AppendObj (Tcl_DString *, Tcl_Obj *);
+static void AppendObj (Tcl_DString * const, Tcl_Obj * const);
 
-int
-Dbf_Init (Tcl_Interp * interp)
+Init (Dbf, interp, dbfPtr)
 {
-  Tcl_Namespace *dbfPtr;
-
-  DbfInit (interp, dbfPtr);
-  DbfCreateCommand (interp, dbfPtr, open);
-  DbfCreateCommand (interp, dbfPtr, length);
-  DbfCreateCommand (interp, dbfPtr, index);
-  DbfCreateCommand (interp, dbfPtr, keys);
-  DbfCreateCommand (interp, dbfPtr, close);
-  DbfCreateCommand (interp, dbfPtr, foreach);
-  DbfProvide (interp, dbfPtr);
+  CreateCommand (interp, dbfPtr, length);
+  CreateCommand (interp, dbfPtr, index);
+  CreateCommand (interp, dbfPtr, size);
+  CreateCommand (interp, dbfPtr, keys);
+  CreateCommand (interp, dbfPtr, foreach);
   return TCL_OK;
 }
 
-DbfCommandDef (open, clientData, interp, objc, objv)
-{
-  if (objc != 2)
-    {
-      Tcl_WrongNumArgs (interp, 1, objv, "filename");
-      return TCL_ERROR;
-    }
-  if (SetDbfFromPath (interp, Tcl_GetObjResult (interp), objv[1]) != TCL_OK)
-    {
-      return TCL_ERROR;
-    }
-  return TCL_OK;
-}
-
-DbfCommandDef (length, clientData, interp, objc, objv)
+CommandDef (length, clientData, interp, objc, objv)
 {
   Handle *handle;
 
@@ -149,7 +88,7 @@ DbfCommandDef (length, clientData, interp, objc, objv)
       Tcl_WrongNumArgs (interp, 1, objv, "filename");
       return TCL_ERROR;
     }
-  if (GetHandleFromObj (interp, objv[1], &handle) != TCL_OK)
+  if (Dbf_GetHandleFromObj (interp, objv[1], &handle) != TCL_OK)
     {
       return TCL_ERROR;
     }
@@ -158,7 +97,7 @@ DbfCommandDef (length, clientData, interp, objc, objv)
   return TCL_OK;
 }
 
-DbfCommandDef (index, clientData, interp, objc, objv)
+CommandDef (index, clientData, interp, objc, objv)
 {
   Handle *handle;
   int index, fieldCount, i;
@@ -170,7 +109,7 @@ DbfCommandDef (index, clientData, interp, objc, objv)
       Tcl_WrongNumArgs (interp, 1, objv, "filename index");
       return TCL_ERROR;
     }
-  if (GetHandleFromObj (interp, objv[1], &handle) != TCL_OK)
+  if (Dbf_GetHandleFromObj (interp, objv[1], &handle) != TCL_OK)
     {
       return TCL_ERROR;
     }
@@ -183,33 +122,13 @@ DbfCommandDef (index, clientData, interp, objc, objv)
   resultPtr = Tcl_GetObjResult (interp);
   for (i = 0; i < fieldCount; i++)
     {
-      switch (DBFGetFieldInfo (dbfHandle, i, NULL, NULL, NULL))
-        {
-        case FTInteger:
-          Tcl_ListObjAppendElement (interp, resultPtr,
-                                    Tcl_NewIntObj (DBFReadIntegerAttribute
-                                                   (dbfHandle, index, i)));
-          break;
-        case FTDouble:
-          Tcl_ListObjAppendElement (interp, resultPtr,
-                                    Tcl_NewDoubleObj (DBFReadDoubleAttribute
-                                                      (dbfHandle, index, i)));
-          break;
-        default:
-          Tcl_ListObjAppendElement (interp, resultPtr,
-                                    Tcl_NewStringObj (DBFReadStringAttribute
-                                                      (dbfHandle, index, i),
-                                                      -1));
-        }
+      Tcl_ListObjAppendElement (interp, resultPtr,
+                                NewAttributeObj (dbfHandle, index, i));
     }
   return TCL_OK;
 }
 
-DbfCommandDef (keys, clientData, interp, objc, objv) {
-  return TCL_OK;
-}
-
-DbfCommandDef (close, clientData, interp, objc, objv)
+CommandDef (size, clientData, interp, objc, objv)
 {
   Handle *handle;
 
@@ -218,114 +137,259 @@ DbfCommandDef (close, clientData, interp, objc, objv)
       Tcl_WrongNumArgs (interp, 1, objv, "filename");
       return TCL_ERROR;
     }
-  if (GetHandleFromObj (interp, objv[1], &handle) != TCL_OK)
+  if (Dbf_GetHandleFromObj (interp, objv[1], &handle) != TCL_OK)
     {
       return TCL_ERROR;
     }
-  DBFClose (handle->dbfHandle);
-  handle->dbfHandle = NULL;
+  Tcl_SetIntObj (Tcl_GetObjResult (interp),
+                 DBFGetFieldCount (handle->dbfHandle));
   return TCL_OK;
 }
 
-DbfCommandDef (foreach, clientData, interp, objc, objv)
+CommandDef (keys, clientData, interp, objc, objv)
 {
+  Handle *handle;
+  DBFHandle dbfHandle;
+  int fieldCount, i;
+  Tcl_Obj *resultPtr;
+
+  if (objc != 2)
+    {
+      Tcl_WrongNumArgs (interp, 1, objv, "filename");
+      return TCL_ERROR;
+    }
+  if (Dbf_GetHandleFromObj (interp, objv[1], &handle) != TCL_OK)
+    {
+      return TCL_ERROR;
+    }
+  dbfHandle = handle->dbfHandle;
+  fieldCount = DBFGetFieldCount (dbfHandle);
+  resultPtr = Tcl_GetObjResult (interp);
+  for (i = 0; i < fieldCount; i++)
+    {
+      char fieldName[12];
+      DBFGetFieldInfo (dbfHandle, i, fieldName, 0, 0);
+      Tcl_ListObjAppendElement (interp, resultPtr,
+                                Tcl_NewStringObj (fieldName, -1));
+    }
   return TCL_OK;
+}
+
+CommandDef (foreach, clientData, interp, objc, objv)
+{
+  Handle *handle;
+  DBFHandle dbfHandle;
+  int recordCount, fieldCount;
+  ForeachState *statePtr;
+
+  if (objc != 4)
+    {
+      Tcl_WrongNumArgs (interp, 1, objv, "var filename command");
+      return TCL_ERROR;
+    }
+  if (DbfGetHandleFromObj (interp, objv[2], &handle) != TCL_OK)
+    {
+      return TCL_ERROR;
+    }
+  if ((recordCount = DBFGetRecordCount (dbfHandle = handle->dbfHandle)) == 0)
+    {
+      return TCL_OK;
+    }
+  if ((fieldCount = DBFGetFieldCount (dbfHandle)) == 0)
+    {
+      return TCL_OK;
+    }
+  statePtr = (ForeachState *) ckalloc (sizeof (*statePtr));
+  statePtr->i = 0;
+  statePtr->length = recordCount;
+  statePtr->size = fieldCount;
+  if (ForeachAssignments (interp, statePtr, objv[1], dbfHandle) != TCL_OK)
+    {
+      return TCL_ERROR;
+    }
+  Tcl_NRAddCallback (interp, ForeachLoopStep, statePtr, objv[1], dbfHandle,
+                     objv[3]);
+  return Tcl_NREvalObj (interp, objv[3], 0);
+}
+
+static int
+ForeachAssignments (Tcl_Interp * const interp, ForeachState * const statePtr,
+                    Tcl_Obj * const varPtr, DBFHandle const dbfHandle)
+{
+  Tcl_Obj *const valuePtr = Tcl_NewObj ();
+  int const i = statePtr->i;
+  int j;
+  int const size = statePtr->size;
+
+  for (j = 0; j < size; j++)
+    {
+      Tcl_ListObjAppendElement (interp, valuePtr,
+                                NewAttributeObj (dbfHandle, i, j));
+    }
+  if (Tcl_ObjSetVar2 (interp, varPtr, NULL, valuePtr, TCL_LEAVE_ERR_MSG) ==
+      NULL)
+    {
+      return TCL_ERROR;
+    }
+  return TCL_OK;
+}
+
+static int
+ForeachLoopStep (ClientData data[], Tcl_Interp * interp, int result)
+{
+  ForeachState *const statePtr = data[0];
+  Tcl_Obj *const varPtr = data[1];
+  DBFHandle const dbfHandle = data[2];
+  Tcl_Obj *const bodyPtr = data[3];
+
+  switch (result)
+    {
+    case TCL_CONTINUE:
+      result = TCL_OK;
+    case TCL_OK:
+      break;
+    case TCL_BREAK:
+      result = TCL_OK;
+      goto done;
+    case TCL_ERROR:
+    default:
+      goto done;
+    }
+
+  if (statePtr->length > ++statePtr->i)
+    {
+      if ((result =
+           ForeachAssignments (interp, statePtr, varPtr,
+                               dbfHandle)) != TCL_OK)
+        {
+          goto done;
+        }
+      Tcl_NRAddCallback (interp, ForeachLoopStep, statePtr, varPtr, dbfHandle,
+                         bodyPtr);
+      return Tcl_NREvalObj (interp, bodyPtr, 0);
+    }
+  Tcl_ResetResult (interp);
+done:
+  ckfree ((char *) statePtr);
+  return result;
 }
 
 static void
-FreeDbfInternalRep (Tcl_Obj * objPtr)
+FreeHandleInternalRep (Tcl_Obj * objPtr)
 {
   Release (GetHandle (objPtr));
 }
 
 static void
-DupDbfInternalRep (Tcl_Obj * srcPtr, Tcl_Obj * dupPtr)
+DupHandleInternalRep (Tcl_Obj * srcPtr, Tcl_Obj * dupPtr)
 {
-  SetHandleObj (dupPtr, GetHandle (srcPtr));
+  Handle *handle;
+
+  handle = GetHandle (srcPtr);
+  dupPtr->typePtr = &dbfType;
+  SetHandle (dupPtr, handle);
+  Preserve (handle);
 }
 
 static void
-UpdateDbfString (Tcl_Obj * objPtr)
+UpdateHandleString (Tcl_Obj * objPtr)
 {
   Handle *handle;
   int length;
 
-  length = (handle = GetHandle (objPtr))->length;
+  objPtr->length = length = (handle = GetHandle (objPtr))->length;
   objPtr->bytes = ckalloc (sizeof (char) * (length + 1));
   memcpy (objPtr->bytes, handle->bytes, length + 1);
-  objPtr->length = length;
 }
 
 static int
-SetDbfFromAny (Tcl_Interp * interp, Tcl_Obj * objPtr)
+SetHandleFromAny (Tcl_Interp * interp, Tcl_Obj * objPtr)
 {
-  return SetDbfFromPath (interp, objPtr, objPtr);
+  Handle *handle;
+  return Dbf_GetHandleFromObj (interp, objPtr, &handle);
 }
 
 static int
-GetHandleFromObj (Tcl_Interp * interp, Tcl_Obj * objPtr, Handle ** handlePtr)
+Dbf_GetHandleFromObj (Tcl_Interp * interp, Tcl_Obj * objPtr,
+                      Handle ** handlePtr)
 {
-  if (objPtr->typePtr != &dbfType && SetDbfFromAny (interp, objPtr) != TCL_OK)
-    {
-      return TCL_ERROR;
-    }
-  *handlePtr = GetHandle (objPtr);
-  return TCL_OK;
-}
-
-static void
-SetHandleObj (Tcl_Obj * objPtr, Handle * handle)
-{
-  Tcl_InvalidateStringRep (objPtr);
-  Preserve (handle);
-  objPtr->internalRep.otherValuePtr = handle;
-  objPtr->typePtr = &dbfType;
-}
-
-static int
-SetDbfFromPath (Tcl_Interp * interp, Tcl_Obj * objPtr, Tcl_Obj * pathPtr)
-{
-  Tcl_Obj *normalizedPtr;
-  DBFHandle dbfHandle;
   Handle *handle;
 
-  if ((normalizedPtr = Tcl_FSGetNormalizedPath (interp, pathPtr)) == NULL)
+  if (objPtr->typePtr == &dbfType)
     {
-      return TCL_ERROR;
+      handle = GetHandle (objPtr);
     }
-  {
-    int length;
-    char const *filename = Tcl_GetStringFromObj (normalizedPtr, &length);
-    dbfHandle = DBFOpen (filename, "rb");
-    if (dbfHandle == NULL)
-      {
-        if (interp != NULL)
-          {
-            Tcl_DString message;
+  else
+    {
+      int length;
+      char const *bytes = Tcl_GetStringFromObj (objPtr, &length);
+      DBFHandle dbfHandle;
 
-            Tcl_DStringInit (&message);
-            AppendLiteral (&message, "couldn't open \"");
-            AppendObj (&message, pathPtr);
-            AppendLiteral (&message, "\"");
-            Tcl_DStringResult (interp, &message);
-            Tcl_DStringFree (&message);
-          }
-        return TCL_ERROR;
-      }
-    handle = malloc (sizeof (*handle) + sizeof (char) * (length
-#if FLEX_ARRAY + 0 == 0
-                                                         + 1
-#else
-                                                         - FLEX_ARRAY + 1
-#endif
-                     ));
-    handle->refCount = 0;
-    memcpy (handle->bytes, filename, length + 1);
-    handle->length = length;
-  }
-  handle->dbfHandle = dbfHandle;
-  SetHandleObj (objPtr, handle);
+      if ((dbfHandle = DbfOpen (interp, objPtr)) == NULL)
+        {
+          return TCL_ERROR;
+        }
+
+      handle =
+        (Handle *) ckalloc (sizeof (*handle) +
+                            sizeof (char) * (length + 1 + FLEX_ARRAY_SIZE));
+      handle->refCount = 0;
+      handle->dbfHandle = dbfHandle;
+      memcpy (handle->bytes, bytes, length + 1);
+      handle->length = length;
+
+      FreeInternalRep (objPtr);
+      objPtr->typePtr = &dbfType;
+      SetHandle (objPtr, handle);
+      Preserve (handle);
+    }
+  *handlePtr = handle;
   return TCL_OK;
+}
+
+static Tcl_Obj *
+NewAttributeObj (DBFHandle dbfHandle, int index, int field)
+{
+  if (DBFIsAttributeNULL (dbfHandle, index, field))
+    {
+      return Tcl_NewObj ();
+    }
+  switch (DBFGetFieldInfo (dbfHandle, field, NULL, NULL, NULL))
+    {
+    case FTInteger:
+      return
+        Tcl_NewIntObj (DBFReadIntegerAttribute (dbfHandle, index, field));
+    case FTDouble:
+      return
+        Tcl_NewDoubleObj (DBFReadDoubleAttribute (dbfHandle, index, field));
+    default:
+      return
+        Tcl_NewStringObj (DBFReadStringAttribute (dbfHandle, index, field),
+                          -1);
+    }
+}
+
+static DBFHandle
+DbfOpen (Tcl_Interp * interp, Tcl_Obj * pathPtr)
+{
+  DBFHandle dbfHandle;
+
+  if ((dbfHandle = DBFOpen (Tcl_GetString (pathPtr), "rb")) == NULL)
+    {
+      if (interp != NULL)
+        {
+          Tcl_DString message;
+
+          Tcl_DStringInit (&message);
+          AppendLiteral (&message, "couldn't open \"");
+          AppendObj (&message, pathPtr);
+          AppendLiteral (&message, "\"");
+          Tcl_DStringResult (interp, &message);
+          Tcl_DStringFree (&message);
+        }
+      return NULL;
+    }
+  return dbfHandle;
 }
 
 static void
@@ -333,18 +397,13 @@ Release (Handle * handle)
 {
   if (--handle->refCount <= 0)
     {
-      if (handle->dbfHandle != NULL)
-        {
-          DBFClose (handle->dbfHandle);
-        }
-      puts ("hi");
-      free (handle);
-      puts ("hello");
+      DBFClose (handle->dbfHandle);
+      ckfree ((char *) handle);
     }
 }
 
 static void
-AppendObj (Tcl_DString * dsPtr, Tcl_Obj * objPtr)
+AppendObj (Tcl_DString * const dsPtr, Tcl_Obj * const objPtr)
 {
   int length;
   char const *bytes = Tcl_GetStringFromObj (objPtr, &length);
