@@ -12,7 +12,7 @@ CommandDecl (get);
 CommandDecl (keys);
 CommandDecl (size);
 CommandDecl (values);
-CommandDecl (foreach);
+NRCommandDecl (foreach);
 
 typedef struct
 {
@@ -37,7 +37,7 @@ Init (interp, dbfPtr)
   CreateCommand (interp, dbfPtr, keys);
   CreateCommand (interp, dbfPtr, size);
   CreateCommand (interp, dbfPtr, values);
-  CreateCommand (interp, dbfPtr, foreach);
+  CreateNRCommand (interp, dbfPtr, foreach);
   return TCL_OK;
 }
 
@@ -266,7 +266,7 @@ CommandDef (values, clientData, interp, objc, objv)
   return TCL_OK;
 }
 
-CommandDef (foreach, clientData, interp, objc, objv)
+NRCommandDef (foreach, clientData, interp, objc, objv)
 {
   Handle *handle;
   DBFHandle dbfHandle;
